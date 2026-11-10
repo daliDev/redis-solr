@@ -7,6 +7,7 @@ use Illuminate\Contracts\Queue\ShouldQueue;
 use Illuminate\Foundation\Queue\Queueable;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Redis;
+use App\Models\FileMeta;
 
 class ProcessFile implements ShouldQueue,ShouldBeUnique
 {
@@ -35,16 +36,18 @@ class ProcessFile implements ShouldQueue,ShouldBeUnique
      */
     public function handle(): void
     {
-        $donekey = "processed:{$this->fileId}";
-
-        if(Redis::exists($donekey)){
-            Log::info("File {$this->fileId} has already been processed. Skipping.");
+        $file = FileMeta::find($this->fileId);
+        if ($file->status === 'processed') {
+            Log::Info("skip {$file->name}: already processed");
             return;
         }
+        Log::info("Proccessing file {$file->name} (attempt {$this->attempts()})...");
+        sleep(10); // Simulate processing time
 
-        Log::info("Processing file {$this->fileId}...");
-        sleep(20); // Simulate processing time
-        Redis::set($donekey, now()->toIso8601String());
-        Log::info("File {$this->fileId} processed successfully33333.");
+        $file->update([
+            'status' => 'processed',
+            'processed_at' => now(),
+        ]);
+        Log::info("File {$file->name} done.");
     }
 }

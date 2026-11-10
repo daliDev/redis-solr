@@ -1,10 +1,13 @@
 services:
+  mongo:
+    image: mongo:8.0
+    volumes: ["mongo-data:/data/db"]
   app:
     build:
       context: .
       args: { UID: "${UID:-1000}", GID: "${GID:-1000}" }
     volumes: [".:/var/www"]
-    depends_on: [redis]
+    depends_on: [redis, mongo]
 
   web:
     image: nginx:1.27-alpine
@@ -21,7 +24,7 @@ services:
     user: www-data # لا root — وإلا ينشئ laravel.log كـ root ويكسر php-fpm
     volumes: [".:/var/www"]
     command: php artisan queue:work redis --tries=3 --timeout=60
-    depends_on: [redis]
+    depends_on: [redis, mongo]
 
   redis:
     image: redis:7-alpine
@@ -30,3 +33,4 @@ services:
 
 volumes:
   redis-data: {}
+  mongo-data: {}

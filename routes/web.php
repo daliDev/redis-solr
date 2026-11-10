@@ -6,7 +6,8 @@ use Illuminate\Support\Facades\RateLimiter;
 use Illuminate\Http\Request;
 use App\Jobs\ProcessFile;
 use Illuminate\Support\Facades\Redis;
-
+use App\Models\FileMeta;
+use MongoDB\BSON\UTCDateTime;
 
 Route::get('/', function () {
     return view('welcome');
@@ -75,8 +76,85 @@ Route::post('/pay', function (Request $r) {
     return response(['status' => 'payment recorded'], 201);
 });
 
-// F) Queue + ShouldBeUnique
-Route::get('/upload/{fileId}', function (string $fileId) {
-    ProcessFile::dispatch($fileId);
-    return ['queued' => $fileId];
+
+
+Route::get('/upload/{name}', function (string $name) {
+    $file = FileMeta::create([
+        'name' => $name,
+        'parent_id' => 'folder-1',
+        'owner_id' => 1,
+        'ext' => pathinfo($name, PATHINFO_EXTENSION),
+        'size' => random_int(1000, 1000000),
+        'shares' => [],
+        'status' => 'queued',
+
+    ]);
+    ProcessFile::dispatch($file->id);
+    return ['id' => $file->id, 'status' => $file->status];
 });
+
+Route::get('/files/{id}',fn (string $id) => FileMeta::findOrFail($id));
+
+Route::get('/mongo/seed', function () {
+     FileMeta::truncate();
+     $exts = ['pdf', 'docx', 'xlsx', 'txt'];
+    for ($b = 0; $b < 20; $b++) {
+        $batch = [];
+        for ($i = 0; $i < 1000; $i++) {
+            $n = $b * 1000 + $i;
+            $ext = $exts[array_rand($exts)];
+            $batch[] = [
+                'name'       => "doc-{$n}.{$ext}",
+                'parent_id'  => 'folder-' . random_int(1, 500),
+                'owner_id'   => random_int(1, 50),
+                'ext'        => $ext,
+                'size'       => random_int(1_000, 50_000_000),
+                'status'     => 'processed',
+                'shares'     => random_int(0, 9) === 0 ? [['user_id' => random_int(1, 50), 'perm' => 'read']] : [],
+                'created_at' => new UTCDateTime(now()->subMinutes(random_int(0, 525_600))),
+            ];
+        }
+        FileMeta::insert($batch);
+    }
+    return ['files' => FileMeta::count()];
+});
+
+Route::get('/files/owner/{ownerId}', function (int $ownerId) {
+    $t = microtime(true);
+    $files = FileMeta::where('owner_id', $ownerId)
+    ->orderBy('created_at', 'desc')
+    ->limit(10)
+    ->get();
+    return ['ms' => round((microtime(true) - $t) * 1000), 'files' => $files];
+});
+
+Route::get('/files/{id}/share/{user}', function (string $id, int $user) {
+    // أضف فقط لو المستخدم غير موجود — شرط وتحديث في عملية ذرّية واحدة
+    $added = FileMeta::where('_id', $id)
+        ->where('shares.user_id', '!=', $user)
+        ->push('shares', ['user_id' => $user, 'perm' => 'read']);
+
+    return ['added' => (bool) $added, 'file' => FileMeta::find($id, ['name', 'shares'])];
+});
+
+Route::get('/files/{id}/unshare/{user}',function(string $id,string $user){
+    $file = FileMeta::where('id', $id)->pull('shares',['user_id'=>$user]);
+    return $file->find($id,['name','shares']);
+});
+Route::get('/files/shared-with/{user}',function(int $user){
+    $files = FileMeta::where('shares.user_id',$user)->get(['name','owner_id']);
+    return ['count'=>count($files),'files'=>$files];
+});
+
+
+Route::get('/files/stats/{owner}',function(int $owner){
+   $row = FileMeta::raw(fn ($collection) => $collection->aggregate([
+        ['$match'=>['owner_id'=>$owner]],
+        ['$group'=>['_id'=>'$ext','count'=>['$sum'=>1],'total_size'=>['$sum'=>['$divide'=>['$size', 1048576]]]]],
+        ['$sort'=>['total_size'=>-1]],
+        ['typeMap'=>['root'=>'array','document'=>'array']]
+    ]));
+
+    return iterator_to_array($row);
+});
+   
